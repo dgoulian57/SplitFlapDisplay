@@ -1,0 +1,13 @@
+# Never commit real credentials
+firmware/esp32/splitflap/secrets.h
+firmware/esp32/tester/secrets.h
+
+# Build artifacts
+.pio/
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch
+
+# OS junk
+.DS_Store
