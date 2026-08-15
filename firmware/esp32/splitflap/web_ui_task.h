@@ -10,7 +10,7 @@
    Enable by setting -DWEB_UI=true in platformio.ini (see env:chainlink).
 
    API (all same-origin, consumed by web_ui_page.h):
-     GET    /api/state              live module state, wifi info, current time
+     GET    /api/state              live module state (incl. sensor/home diagnostics), wifi info, current time
      POST   /api/message            {"text": "..."} -> shows immediately
      GET    /api/presets            [{id, name, text}, ...]
      POST   /api/presets            {"name": "...", "text": "..."} -> adds one
@@ -39,6 +39,12 @@
                                      notes on module 3) -- NOT a substitute for the guided
                                      start/blank/verify calibration flow above. Requires an active
                                      session for the module (via /api/calibrate/start) same as move.
+     POST   /api/calibrate/clearOffset {"module": N} -> resets module N's offset back to 0
+                                     (uncalibrated) and immediately persists to flash, so a reboot
+                                     won't reload the old saved offset. For deliberately returning a
+                                     module to its out-of-the-box state (e.g. to redo/record the
+                                     calibration flow), not part of normal calibration. Requires an
+                                     active session for the module (via /api/calibrate/start).
      POST   /api/calibrate/save     -> persists all modules' offsets to flash and ends the
                                      calibration session (same underlying save as calibrate_single.py)
      POST   /api/calibrate/cancel   {"module": N} -> aborts the in-progress calibration session
@@ -141,6 +147,7 @@ class WebUiTask : public Task<WebUiTask> {
         void handleCalibrateStart();
         void handleCalibrateMove();
         void handleCalibrateSetOffset();
+        void handleCalibrateClearOffset();
         void handleCalibrateNudgeOffset();
         void handleCalibrateSave();
         void handleCalibrateCancel();

@@ -162,6 +162,12 @@ void SplitflapTask::processQueue() {
                         case QCMD_SET_OFFSET:
                             modules[i]->SetOffset();
                             break;
+                        case QCMD_CLEAR_OFFSET:
+                            // Resets to an uncalibrated offset (0), same low-level primitive
+                            // used to load a saved offset at boot (RestoreOffset), just with
+                            // an explicit 0 instead of whatever was in config.pb.
+                            modules[i]->RestoreOffset(0);
+                            break;
                         default:
                             assert(data[i] >= QCMD_FLAP && data[i] < QCMD_FLAP + NUM_FLAPS);
                             modules[i]->GoToFlapIndex(data[i] - QCMD_FLAP);
@@ -444,6 +450,13 @@ void SplitflapTask::setOffset(const uint8_t id) {
     Command command = {};
     command.command_type = CommandType::MODULES;
     command.data.module_command[id] = QCMD_SET_OFFSET;
+    assert(xQueueSendToBack(queue_, &command, portMAX_DELAY) == pdTRUE);
+}
+
+void SplitflapTask::clearOffset(const uint8_t id) {
+    Command command = {};
+    command.command_type = CommandType::MODULES;
+    command.data.module_command[id] = QCMD_CLEAR_OFFSET;
     assert(xQueueSendToBack(queue_, &command, portMAX_DELAY) == pdTRUE);
 }
 

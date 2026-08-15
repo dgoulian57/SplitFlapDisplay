@@ -51,6 +51,8 @@ const char WEB_UI_HTML[] PROGMEM = R"HTMLPAGE(
   .cal-status.warn { color:#e0a030; }
   .cal-status.err { color:#e05050; }
   .cal-status.ok { color:#4caf50; }
+  .char-counter { color:#999; font-size:0.8rem; text-align:right; margin:-4px 0 8px; }
+  .char-counter.over { color:#e0a030; }
 </style>
 </head>
 <body>
@@ -67,9 +69,10 @@ const char WEB_UI_HTML[] PROGMEM = R"HTMLPAGE(
   <div class="card">
     <label>Send a message</label>
     <div class="row">
-      <input type="text" id="messageInput" placeholder="Type a message" style="flex:1;">
+      <input type="text" id="messageInput" placeholder="Type a message" style="flex:1;" oninput="updateMessageCounter()">
       <button onclick="sendMessage()">Send</button>
     </div>
+    <div class="char-counter" id="messageCounter">0 / 12</div>
     <div class="row">
       <input type="text" id="presetName" placeholder="Preset name (optional save)" style="flex:1;">
       <button class="secondary" onclick="saveAsPreset()">Save as preset</button>
@@ -132,11 +135,15 @@ const char WEB_UI_HTML[] PROGMEM = R"HTMLPAGE(
       <div class="row">
         <select id="calModuleSelect"></select>
         <button onclick="calStart()">Start calibration</button>
+        <button class="secondary" id="calSensorWatchBtn" onclick="calToggleSensorWatch()">Watch sensor (live)</button>
+        <button class="danger" onclick="calClearCalibration()">Clear calibration</button>
       </div>
+      <div class="cal-status" id="calDiag" style="display:none;"></div>
     </div>
 
     <div id="calWizard" class="cal-step" style="display:none;">
       <div class="muted" id="calModuleLabel"></div>
+      <div class="cal-status" id="calWizardDiag"></div>
 
       <div id="calAskChar">
         <label>What is this module showing right now?</label>
@@ -229,10 +236,22 @@ async function refreshState() {
       calNumModules = state.numModules;
       populateCalSelectors();
       populateNudgeSelector();
+      updateMessageCounter();
     }
   } catch (e) {
     document.getElementById('statusLine').textContent = 'Unable to reach display';
   }
+}
+
+// Live character count against calNumModules -- server truncates a message
+// longer than NUM_MODULES (one char per module, see showText() in
+// web_ui_task.cpp), so flagging that here before you hit Send saves a
+// surprise.
+function updateMessageCounter() {
+  const len = document.getElementById('messageInput').value.length;
+  const counterEl = document.getElementById('messageCounter');
+  counterEl.textContent = len + ' / ' + calNumModules;
+  counterEl.className = 'char-counter' + (len > calNumModules ? ' over' : '');
 }
 
 async function sendMessage() {
@@ -456,6 +475,11 @@ function populateCalSelectors() {
 }
 
 async function calStart() {
+  if (sensorWatchTimer) {
+    clearInterval(sensorWatchTimer);
+    sensorWatchTimer = null;
+    document.getElementById('calSensorWatchBtn').textContent = 'Watch sensor (live)';
+  }
   const module = parseInt(document.getElementById('calModuleSelect').value);
   const res = await fetch('/api/calibrate/start', { method: 'POST', body: JSON.stringify({ module }) });
   const body = await res.json();
@@ -467,6 +491,7 @@ async function calStart() {
   document.getElementById('calIdle').style.display = 'none';
   document.getElementById('calWizard').style.display = 'block';
   document.getElementById('calModuleLabel').textContent = 'Calibrating module ' + module;
+  calRefreshWizardDiag();
   document.getElementById('calAskChar').style.display = 'block';
   document.getElementById('calConfirmBlank').style.display = 'none';
   document.getElementById('calConfirmA').style.display = 'none';
@@ -480,16 +505,119 @@ async function calGetModuleState(module) {
   return state.modules[module];
 }
 
+// Human-readable sensor/home diagnostics for a module -- primarily to help
+// diagnose a module that never moves: if it never found its home sensor at
+// boot (e.g. a backwards/missing magnet), firmware parks it in sensor_error
+// and won't drive the motor at all until it's re-homed successfully.
+function describeModuleDiag(m) {
+  let text = 'state: ' + m.state + ' | home sensor: ' + (m.homeState ? 'triggered' : 'not triggered');
+  if (m.countMissedHome || m.countUnexpectedHome) {
+    text += ' | missed home: ' + m.countMissedHome + ', unexpected home: ' + m.countUnexpectedHome;
+  }
+  if (m.state === 'sensor_error') {
+    text += ' -- never found home at boot, motor is parked and won\'t move. Check the home sensor/magnet, then power-cycle to retry homing.';
+  } else if (m.state === 'look_for_home') {
+    text += ' -- still searching for home now.';
+  }
+  return text;
+}
+
+function diagClassFor(m) {
+  return 'cal-status' + (m.state === 'sensor_error' || m.state === 'panic' ? ' err' : m.state === 'look_for_home' ? ' warn' : ' ok');
+}
+
+// Returns a module to its out-of-the-box (offset=0) state and immediately
+// persists that to flash. For deliberately re-doing/recording the
+// calibration flow -- not part of normal calibration, so it wraps
+// start/clear/cancel itself rather than requiring the full wizard.
+async function calClearCalibration() {
+  const module = parseInt(document.getElementById('calModuleSelect').value);
+  if (!confirm('Clear saved calibration for module ' + module + '? It will need to be recalibrated before it displays correctly.')) {
+    return;
+  }
+  const diagEl = document.getElementById('calDiag');
+  diagEl.style.display = 'block';
+  diagEl.className = 'cal-status';
+  diagEl.textContent = 'Clearing calibration for module ' + module + '...';
+
+  const startRes = await fetch('/api/calibrate/start', { method: 'POST', body: JSON.stringify({ module }) });
+  const startBody = await startRes.json();
+  if (!startRes.ok) {
+    diagEl.textContent = startBody.error || 'Could not start calibration session';
+    diagEl.className = 'cal-status err';
+    return;
+  }
+
+  const clearRes = await fetch('/api/calibrate/clearOffset', { method: 'POST', body: JSON.stringify({ module }) });
+  const clearBody = await clearRes.json();
+  await fetch('/api/calibrate/cancel', { method: 'POST', body: JSON.stringify({ module }) });
+
+  if (!clearRes.ok) {
+    diagEl.textContent = clearBody.error || 'Could not clear calibration';
+    diagEl.className = 'cal-status err';
+    return;
+  }
+  diagEl.textContent = 'Module ' + module + ' calibration cleared and saved -- it is now uncalibrated (like a fresh module).';
+  diagEl.className = 'cal-status ok';
+}
+
+let sensorWatchTimer = null;
+let sensorWatchLastHome = null;
+let sensorWatchToggleCount = 0;
+
+// Live-polls /api/state so you can rotate the drum by hand (motor unpowered
+// or not) and watch the raw home sensor reading react in real time -- a
+// snapshot alone can't tell you whether the sensor fires at the right
+// physical position, only whether it's currently on/off.
+async function calToggleSensorWatch() {
+  const btn = document.getElementById('calSensorWatchBtn');
+  const diagEl = document.getElementById('calDiag');
+  if (sensorWatchTimer) {
+    clearInterval(sensorWatchTimer);
+    sensorWatchTimer = null;
+    btn.textContent = 'Watch sensor (live)';
+    return;
+  }
+  const module = parseInt(document.getElementById('calModuleSelect').value);
+  sensorWatchLastHome = null;
+  sensorWatchToggleCount = 0;
+  diagEl.style.display = 'block';
+  btn.textContent = 'Stop watching';
+
+  const poll = async () => {
+    const m = await calGetModuleState(module);
+    if (sensorWatchLastHome !== null && sensorWatchLastHome !== m.homeState) {
+      sensorWatchToggleCount++;
+    }
+    sensorWatchLastHome = m.homeState;
+    diagEl.textContent = 'Module ' + module + ' -- ' + describeModuleDiag(m) +
+      ' | toggled ' + sensorWatchToggleCount + 'x since watching started -- rotate the drum by hand and watch this update.';
+    diagEl.className = diagClassFor(m);
+  };
+  poll();
+  sensorWatchTimer = setInterval(poll, 250);
+}
+
 // Waits for the module to report idle after a move was issued. Like the
 // human-confirm steps that follow, this is informational, not the final
 // word -- firmware can report success even if the physical drum didn't
 // actually move (a known failure mode with this hardware), which is exactly
 // why every step here ends with a human visually confirming the result.
+async function calRefreshWizardDiag() {
+  if (calModule === null) return;
+  const m = await calGetModuleState(calModule);
+  const diagEl = document.getElementById('calWizardDiag');
+  diagEl.textContent = describeModuleDiag(m);
+  diagEl.className = diagClassFor(m);
+  return m;
+}
+
 async function calWaitForIdle(module) {
   const start = Date.now();
   let sawMoving = false;
   while (Date.now() - start < CAL_MOVE_TIMEOUT_MS) {
     const m = await calGetModuleState(module);
+    calRefreshWizardDiag();
     if (m.moving) sawMoving = true;
     if (!m.moving && sawMoving) return { m, timedOut: false, sawMoving: true };
     await sleep(CAL_POLL_MS);
@@ -728,6 +856,7 @@ loadAutomation();
 refreshTimer();
 populateCalSelectors();
 populateNudgeSelector();
+updateMessageCounter();
 setInterval(refreshState, 3000);
 setInterval(refreshTimer, 3000);
 </script>

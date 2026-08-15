@@ -106,6 +106,27 @@ void WebUiTask::handleRoot() {
     server_.send_P(200, "text/html", WEB_UI_HTML);
 }
 
+namespace {
+    // Mirrors SerialLegacyJsonProtocol::dumpStatus's state names (serial_legacy_json_protocol.cpp)
+    // so USB and wireless diagnostics agree.
+    std::string moduleStateName(State state) {
+        switch (state) {
+            case NORMAL:
+                return "normal";
+            case LOOK_FOR_HOME:
+                return "look_for_home";
+            case SENSOR_ERROR:
+                return "sensor_error";
+            case PANIC:
+                return "panic";
+            case STATE_DISABLED:
+                return "disabled";
+            default:
+                return "unknown";
+        }
+    }
+}
+
 void WebUiTask::handleGetState() {
     SplitflapState state = splitflap_task_.getState();
     std::vector<Json> modules_arr;
@@ -115,6 +136,10 @@ void WebUiTask::handleGetState() {
             {"flapIndex", state.modules[i].flap_index},
             {"char", std::string(1, c)},
             {"moving", state.modules[i].moving},
+            {"state", moduleStateName(state.modules[i].state)},
+            {"homeState", state.modules[i].home_state},
+            {"countMissedHome", state.modules[i].count_missed_home},
+            {"countUnexpectedHome", state.modules[i].count_unexpected_home},
         });
     }
 
@@ -404,6 +429,35 @@ void WebUiTask::handleCalibrateSetOffset() {
     server_.send(200, "application/json", "{\"ok\":true}");
 }
 
+void WebUiTask::handleCalibrateClearOffset() {
+    if (!server_.hasArg("plain")) {
+        server_.send(400, "application/json", "{\"error\":\"missing body\"}");
+        return;
+    }
+    std::string err;
+    Json body = Json::parse(server_.arg("plain").c_str(), err);
+    if (!err.empty() || !body["module"].is_number()) {
+        server_.send(400, "application/json", "{\"error\":\"expected {module: number}\"}");
+        return;
+    }
+    int module = (int)body["module"].number_value();
+    if (!calibration_active_ || module != calibration_module_) {
+        server_.send(409, "application/json", "{\"error\":\"no active calibration session for this module\"}");
+        return;
+    }
+    splitflap_task_.clearOffset((uint8_t)module);
+    // Persist immediately (unlike setOffset/nudgeOffset, which wait for the
+    // normal wizard's explicit save step) -- the whole point of this endpoint
+    // is to return the module to an uncalibrated state that survives a
+    // reboot, not just clear it in memory until the next power cycle reloads
+    // the old saved offset from flash.
+    splitflap_task_.saveAllOffsets();
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Web UI: cleared calibration for module %d", module);
+    logger_.log(buf);
+    server_.send(200, "application/json", "{\"ok\":true}");
+}
+
 void WebUiTask::handleCalibrateNudgeOffset() {
     if (!server_.hasArg("plain")) {
         server_.send(400, "application/json", "{\"error\":\"missing body\"}");
@@ -644,6 +698,7 @@ void WebUiTask::run() {
     server_.on("/api/calibrate/start", HTTP_POST, [this]() { handleCalibrateStart(); });
     server_.on("/api/calibrate/move", HTTP_POST, [this]() { handleCalibrateMove(); });
     server_.on("/api/calibrate/setOffset", HTTP_POST, [this]() { handleCalibrateSetOffset(); });
+    server_.on("/api/calibrate/clearOffset", HTTP_POST, [this]() { handleCalibrateClearOffset(); });
     server_.on("/api/calibrate/nudgeOffset", HTTP_POST, [this]() { handleCalibrateNudgeOffset(); });
     server_.on("/api/calibrate/save", HTTP_POST, [this]() { handleCalibrateSave(); });
     server_.on("/api/calibrate/cancel", HTTP_POST, [this]() { handleCalibrateCancel(); });

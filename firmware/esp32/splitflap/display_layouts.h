@@ -53,6 +53,10 @@ static void getLayoutPositionSingleRowZigZag(const uint8_t module_index, uint8_t
  * Set flip_first_rows if the first row chain goes the other direction (driver 0 is on the right when
  * viewed from the front side)
  */
+// Reference/example layout, not currently selected by getLayoutPosition() below (see the
+// commented-out call) -- marked unused so it doesn't fail the build with -Werror while still
+// being available as a documented alternative to uncomment.
+__attribute__((unused))
 static void getLayoutPositionDualRowZigZag(const bool flip_first_rows, const uint8_t module_index, uint8_t* out_row, uint8_t* out_col) {
     uint8_t row_pair = module_index / 2 / DISPLAY_COLUMNS;
     bool upside_down_row_pair = (row_pair + flip_first_rows) % 2;
