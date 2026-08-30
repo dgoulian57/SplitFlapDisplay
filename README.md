@@ -9,6 +9,34 @@ including the self-hosted WiFi web UI (message, presets, automation, timer).
 - **USB cable** for your ESP32 (the T-Display board used here).
 - This folder, unzipped, opened in VS Code.
 
+## Before you start (first-time setup)
+
+A few things that trip people up the first time they flash an ESP32:
+
+- **Use a data cable, not a charge-only cable.** If your board never shows up
+  as a serial/COM port, this is the #1 cause — try a different USB cable
+  before troubleshooting anything else.
+- **Install the USB-to-serial driver.** These boards use a WCH USB-to-serial
+  chip (CH9102 or CH340 depending on revision). Windows almost always needs a
+  driver installed before the board will show up as a COM port; macOS is
+  hit-or-miss depending on chip revision and OS version; Linux usually works
+  out of the box. Get the driver directly from the chip maker:
+  - Windows: https://www.wch.cn/downloads/CH341SER_EXE.html
+  - macOS: https://www.wch.cn/downloads/CH34XSER_MAC_ZIP.html
+  - After installing, unplug and replug the board.
+- **The first build downloads the ESP32 toolchain.** PlatformIO's first
+  Upload on a fresh checkout pulls down the ESP32 platform/toolchain (a few
+  hundred MB) — needs an internet connection and can take several minutes
+  before it even starts flashing. This is normal, not a hang.
+- **Selecting the port.** PlatformIO usually auto-detects it. If not, or if
+  you have multiple serial devices plugged in, pick it manually:
+  - macOS: `/dev/cu.wchusbserial*` or `/dev/cu.usbserial*`
+  - Windows: `COM3`, `COM4`, etc. (check Device Manager if unsure)
+  - Linux: `/dev/ttyUSB0`, etc.
+- **Close anything else using the port before uploading.** The web UI, a
+  serial monitor, or any other program connected to the board will block the
+  upload with a port-busy error — disconnect it first.
+
 ## Setup
 
 1. Open this folder in VS Code (PlatformIO will auto-detect `platformio.ini`).
